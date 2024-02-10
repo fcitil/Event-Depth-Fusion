@@ -1,2 +1,6 @@
 #ignore rosbag files
 *.bag
+#ignore vscode files
+.vscode
+#ignore python cache
+__pycache__
