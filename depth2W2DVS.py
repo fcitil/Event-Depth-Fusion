@@ -60,7 +60,7 @@ class ImageListener:
                                 self.projected_depth_on_DVS[int(result[1]), int(result[0])] = Z
                                 cnt += 1
                                 print("iteration no: ", cnt)
-                            #time.sleep(0.1)
+
                     if (not self.pix_grade is None):
                         line += ' Grade: %2d' % self.pix_grade
                     line += '\r'
@@ -78,6 +78,57 @@ class ImageListener:
         except ValueError as e:
             return
 
+    def DepthRGBframe_alignment(self, data):
+        """
+        Depth RGB frame alignnment with pyrealsense2 library
+        """
+        # create a rs2 pipeline
+        pipeline = rs2.pipeline()
+        # create a config and configure the pipeline to stream
+        # different resolutions of color and depth streams
+        config = rs2.config()
+        config.enable_stream(rs2.stream.depth, 848, 480, rs2.format.z16, 30)
+        config.enable_stream(rs2.stream.color, 346, 260, rs2.format.bgr8, 30)
+        
+        
+        depth_sensor = CameraInfo.get_device().first_depth_sensor()
+        depth_scale = depth_sensor.get_depth_scale()
+        print("Depth Scale is: ", depth_scale)
+
+        clipping_distance_in_meters = 1 #1 meter
+        clipping_distance = clipping_distance_in_meters / depth_scale
+
+        align_to = rs2.stream.first_stream_to_align
+        
+        align = rs2.align(align_to)
+        
+        try:
+            
+            aligned_frames = align.process(data)
+            aligned_depth_frame = aligned_frames.get_depth_frame()
+            color_frame = aligned_frames.get_color_frame()
+
+            if not aligned_depth_frame or not color_frame:
+                return
+            
+            depth_image = np.asanyarray(aligned_depth_frame.get_data())
+            color_image = np.asanyarray(color_frame.get_data())
+            
+            
+            cv_image = self.bridge.imgmsg_to_cv2(data, data.encoding)
+            depth_image = np.asanyarray(cv_image)
+
+
+
+
+
+            #TODO
+        except CvBridgeError as e:
+            print(e)
+            return
+        except ValueError as e:
+            return
+
     def confidenceCallback(self, data):
         try:
             cv_image = self.bridge.imgmsg_to_cv2(data, data.encoding)
@@ -87,8 +138,6 @@ class ImageListener:
         except CvBridgeError as e:
             print(e)
             return
-
-
 
     def imageDepthInfoCallback(self, cameraInfo):
         try:

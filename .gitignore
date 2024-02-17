@@ -1,6 +1,10 @@
-#ignore rosbag files
-*.bag
 #ignore vscode files
 .vscode
 #ignore python cache
 __pycache__
+# ignore .bag files
+*.bag
+# ignore color_frame folder
+color_folder
+# ignore depth_frame folder
+depth_folder
