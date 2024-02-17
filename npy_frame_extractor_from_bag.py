@@ -65,7 +65,7 @@ try:
     config.enable_stream(rs.stream.depth,1280, 720)#, rs.format.z16, fps)
     config.enable_stream(rs.stream.color, 640, 480)#, rs.format.bgr8, fps)
     
-    config.enable_device_from_file("d435i_walking.bag")
+    config.enable_device_from_file("d435i_walk_around.bag")
     # start streaming with pipeline and get the configuration
     cfg = pipeline.start(config)
     

@@ -29,11 +29,6 @@ max_num_frames  = 300      # max number of framesets to be captured into npy fil
 depth_directory = os.path.join(os.path.dirname(__file__), 'depth_folder')
 color_directory = os.path.join(os.path.dirname(__file__), 'color_folder')
 
-if not os.path.exists(depth_directory):
-    os.makedirs(depth_directory)
-if not os.path.exists(color_directory):
-    os.makedirs(color_directory)
-
 # depth and color file names
 depth_file_name = "depth"  # depth_file_name + str(i) + ".npy"
 color_file_name = "color"  # color_file_name + str(i) + ".npy"
@@ -46,6 +41,10 @@ sdev = rs.software_device()
 
 # software depth sensor
 depth_sensor: rs.software_sensor = sdev.add_sensor("Depth")
+
+# add read only option to the depth sensor
+depth_sensor.add_read_only_option(rs.option.depth_units, 0.001)  # 0.001 meters
+depth_sensor.add_read_only_option(rs.option.stereo_baseline, 49.93613815307617)  # 0.001 meters
 
 # depth instrincis
 depth_intrinsics = rs.intrinsics()
@@ -94,9 +93,6 @@ color_intrinsics.fy = 615.0965576171875
 color_intrinsics.coeffs = [0.0, 0.0, 0.0, 0.0, 0.0]      ## [0.0, 0.0, 0.0, 0.0, 0.0]
 color_intrinsics.model = rs.pyrealsense2.distortion.brown_conrady     ## rs.pyrealsense2.distortion.brown_conrady
 
-print("color_intrinsics.coeffs:", color_intrinsics.coeffs)
-print("color_intrinsics.model:", color_intrinsics.model)
-
 color_stream = rs.video_stream()
 color_stream.type = rs.stream.color
 color_stream.width = color_intrinsics.width
@@ -112,10 +108,12 @@ color_profile = color_sensor.add_video_stream(color_stream)
 
 # depth to color extrinsics
 depth_to_color_extrinsics = rs.extrinsics()
-depth_to_color_extrinsics.rotation = [0.999919056892395, 0.012150709517300129, -0.0037808690685778856,
+depth_to_color_extrinsics.rotation = np.array([0.999919056892395, 0.012150709517300129, -0.0037808690685778856,
                                        -0.012139241211116314, 0.9999216794967651, 0.003041553311049938,
-                                         0.0038175301160663366, -0.0029954100027680397, 0.9999881982803345]
-depth_to_color_extrinsics.translation = [0.015014111064374447, 0.0002514976658858359, 0.00042542649316601455]
+                                         0.0038175301160663366, -0.0029954100027680397, 0.9999881982803345]) 
+depth_to_color_extrinsics.translation = np.array([0.015014111064374447, 
+                                         0.0002514976658858359, 
+                                         0.00042542649316601455])
 depth_profile.register_extrinsics_to(depth_profile, depth_to_color_extrinsics)
 
 # start software sensors
@@ -126,6 +124,14 @@ color_sensor.open(color_profile)
 camera_syncer = rs.syncer()
 depth_sensor.start(camera_syncer)
 color_sensor.start(camera_syncer)
+
+# We will be removing the background of objects more than
+#  clipping_distance_in_meters meters away
+depth_scale = depth_sensor.get_option(rs.option.depth_units)
+print("Depth Scale is: " , depth_scale)
+clipping_distance_in_meters = 3 #3 meter
+clipping_distance = clipping_distance_in_meters / depth_scale
+print("clipping_distance:", clipping_distance)
 
 # create a depth alignment object
 # rs.align allows us to perform alignment of depth frames to others frames
@@ -193,53 +199,59 @@ for i in range(0, max_num_frames):
     # synchronize depth and color, receive as frameset
     frames = camera_syncer.wait_for_frames()
     print("frame set of size:", frames.size(), " ", frames)
+    # print("Depth Frame Size:", np.asanyarray(frames.get_depth_frame().get_data()).shape)
+    # get unaligned depth frame
+    unaligned_depth_frame = frames.get_depth_frame()
+    if not unaligned_depth_frame: 
+        print(" No unaligned depth frame at frame set ", i, ", continue ...")
+        continue
 
-    if i != 0:
-        # get unaligned depth frame
-        unaligned_depth_frame = frames.get_depth_frame()
-        if not unaligned_depth_frame: continue
+    if frames.size() < 2:
+        print("frameset size is less than 2, continue ...")
+        continue
+    
+    # align depth frame to color frame
+    aligned_frames = align.process(frames)
 
-        # align depth frame to color frame
-        aligned_frames = align.process(frames)
+    aligned_depth_frame = aligned_frames.get_depth_frame()
+    color_frame = aligned_frames.get_color_frame()
 
-        aligned_depth_frame = aligned_frames.get_depth_frame()
-        color_frame = aligned_frames.get_color_frame()
+    if (not aligned_depth_frame) or (not color_frame): 
+        print(" No aligned depth or color frame at frame set ", i, ", continue ...")
+        continue
+    
+    depth_image_unaligned = np.asanyarray(unaligned_depth_frame.get_data())
+    depth_image_aligned = np.asanyarray(aligned_depth_frame.get_data()) 
+    color_image_aligned = np.asanyarray(color_frame.get_data())
+    print("depth_image_aligned:", depth_image_aligned)
+    cv2.imshow('Realsense_color_unaligned', depth_image_unaligned)
+    cv2.imshow('RealSense_color', color_image_aligned)
+    cv2.imshow('RealSense_depth_aligned', depth_image_aligned)
 
-        if (not aligned_depth_frame) or (not color_frame): continue
+    # Remove background - Set pixels further than clipping_distance to grey
+    grey_color = 153
+    depth_image_3d = np.dstack((depth_image_aligned,depth_image_aligned,depth_image_aligned)) #depth image is 1 channel, color is 3 channels
+    bg_removed = np.where((depth_image_3d > clipping_distance) | (depth_image_3d <= 0), grey_color, color_image_aligned) # 2999.999857507653 is the clipping distance got from the realsense camera
 
-        # aligned_depth_frame = colorizer.colorize(aligned_depth_frame)
+    # Render images:
+    depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image_aligned, alpha=0.03), cv2.COLORMAP_JET)
+    # Blend the images
+    alpha = 0.75
+    blend = cv2.addWeighted(depth_colormap,alpha,bg_removed,1-alpha,0)
+    images = np.hstack((bg_removed,blend))
+
+    cv2.imshow('Align Example', images)
+
+    # press ENTER or SPACEBAR key to pause the image window for 5 seconds
+    key = cv2.waitKey(1)
+
+    if key == 13 or key == 32: paused = not paused
         
-        print("converting frames into npy array")
-        npy_aligned_depth_image = np.asanyarray(aligned_depth_frame.get_data())
-        npy_aligned_depth_image_3d = np.dstack((npy_aligned_depth_image, np.zeros_like(npy_aligned_depth_image), np.zeros_like(npy_aligned_depth_image)))
-        cv2.imshow('aligned depth', npy_aligned_depth_image)
-        npy_color_image = np.asanyarray(color_frame.get_data())
-        cv2.imshow('color', npy_color_image)
-
-        # render aligned images:
-        # depth align to color
-        # aligned depth on left
-        # color on right
-        images = np.hstack((npy_color_image, npy_color_image))
-
-        cv2.namedWindow('Align Example', cv2.WINDOW_NORMAL)
-        cv2.imshow('Align Example', images)
-
-        # render original unaligned depth as reference
-        colorized_unaligned_depth_frame = colorizer.colorize(unaligned_depth_frame)
-        npy_unaligned_depth_image = np.asanyarray(colorized_unaligned_depth_frame.get_data())
-        cv2.imshow("Unaligned Depth", npy_unaligned_depth_image)
-        # press ENTER or SPACEBAR key to pause the image window for 5 seconds
-        key = cv2.waitKey(1)
-
-        if key == 13 or key == 32: paused = not paused
-            
-        if paused:
-            print("Paused for 5 seconds ...", i, ", press ENTER or SPACEBAR key anytime for additional pauses.")
-            time.sleep(5)
-            paused = not paused
+    if paused:
+        print("Paused for 5 seconds ...", i, ", press ENTER or SPACEBAR key anytime for additional pauses.")
+        time.sleep(5)
+        paused = not paused
 
 # end of second part - align depth to color with the precaptured images in software device
 ######################## End of second part - align depth to color in software device #############################
-pipeline.stop()
 cv2.destroyAllWindows()

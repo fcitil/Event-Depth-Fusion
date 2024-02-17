@@ -19,7 +19,7 @@ pipeline = rs.pipeline()
 #  different resolutions of color and depth streams
 config = rs.config()
 #read from a bag file
-config.enable_device_from_file("d435i_walking.bag")
+config.enable_device_from_file("d435i_walk_around.bag")
 # Get device product line for setting a supporting resolution
 pipeline_wrapper = rs.pipeline_wrapper(pipeline)
 pipeline_profile = config.resolve(pipeline_wrapper)
@@ -43,8 +43,10 @@ profile = pipeline.start(config)
 
 # Getting the depth sensor's depth scale (see rs-align example for explanation)
 depth_sensor = profile.get_device().first_depth_sensor()
-depth_scale = depth_sensor.get_depth_scale()
+depth_scale = depth_sensor.get_option(rs.option.depth_units)
 print("Depth Scale is: " , depth_scale)
+stereo_baseline = depth_sensor.get_option(rs.option.stereo_baseline)
+print("Stereo Baseline is: ", stereo_baseline)
 camera_depth_intrinsic = profile.get_stream(rs.stream.depth).as_video_stream_profile().get_intrinsics()
 print("camera_depth_intrinsic: ", camera_depth_intrinsic)
 print("camera_color_intrinsic: ", profile.get_stream(rs.stream.color).as_video_stream_profile().get_intrinsics())
@@ -53,7 +55,7 @@ print("camera_depth_to_color_extrinsics: ", profile.get_stream(rs.stream.depth).
 #  clipping_distance_in_meters meters away
 clipping_distance_in_meters = 3 #3 meter
 clipping_distance = clipping_distance_in_meters / depth_scale
-
+print("clipping_distance:", clipping_distance)  
 # Create an align object
 # rs.align allows us to perform alignment of depth frames to others frames
 # The "align_to" is the stream type to which we plan to align depth frames.
