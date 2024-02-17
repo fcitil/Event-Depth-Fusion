@@ -38,97 +38,6 @@ if not os.path.exists(color_directory):
 depth_file_name = "depth"  # depth_file_name + str(i) + ".npy"
 color_file_name = "color"  # color_file_name + str(i) + ".npy"
 
-
-
-# intrinsic and extrinsic from the camera
-camera_depth_intrinsics          = rs.intrinsics()  # camera depth intrinsics
-camera_color_intrinsics          = rs.intrinsics()  # camera color intrinsics
-camera_depth_to_color_extrinsics = rs.extrinsics()  # camera depth to color extrinsics
-
-
-######################## Start of first part - capture images from live device #######################################
-# stream depth and color on attached realsnese camera and save depth and color frames into files with npy format
-try:
-    # create a context object, this object owns the handles to all connected realsense devices
-    ctx = rs.context()
-    devs = list(ctx.query_devices())
-    
-    if len(devs) > 0:
-        print("Devices: {}".format(devs))
-    else:
-        print("No camera detected. Please connect a realsense camera and try again.")
-        #exit(0)
-    
-    pipeline = rs.pipeline()
-
-    # configure streams
-    config = rs.config()
-    config.enable_stream(rs.stream.depth,1280, 720)#, rs.format.z16, fps)
-    config.enable_stream(rs.stream.color, 640, 480)#, rs.format.bgr8, fps)
-    
-    config.enable_device_from_file("d435i_walking.bag")
-    # start streaming with pipeline and get the configuration
-    cfg = pipeline.start(config)
-    
-    # get intrinsics
-    camera_depth_profile = cfg.get_stream(rs.stream.depth)                                      # fetch depth depth stream profile
-    camera_depth_intrinsics = camera_depth_profile.as_video_stream_profile().get_intrinsics()   # downcast to video_stream_profile and fetch intrinsics
-    
-    camera_color_profile = cfg.get_stream(rs.stream.color)                                      # fetch color stream profile
-    camera_color_intrinsics = camera_color_profile.as_video_stream_profile().get_intrinsics()   # downcast to video_stream_profile and fetch intrinsics
-    
-    camera_depth_to_color_extrinsics = camera_depth_profile.get_extrinsics_to(camera_color_profile)
- 
-    print("camera depth intrinsic:", camera_depth_intrinsics)
-    print("camera color intrinsic:", camera_color_intrinsics)
-    print("camera depth to color extrinsic:", camera_depth_to_color_extrinsics)
-
-    print("depth intrinsic type:", type(camera_depth_intrinsics))
-    print("color intrinsic type:", type(camera_color_intrinsics))
-    print("depth to color extrinsic type:", type(camera_depth_to_color_extrinsics))
-    print("streaming attached camera and save depth and color frames into files with npy format ...")
-
-    i = 0
-    while i < max_num_frames:
-        # wait until a new coherent set of frames is available on the device
-        frames = pipeline.wait_for_frames()
-        depth = frames.get_depth_frame()
-        color = frames.get_color_frame()
-
-        if not depth or not color: continue
-        
-        # convert images to numpy arrays
-        depth_image = np.asanyarray(depth.get_data())
-        print("depth_image shape:", depth_image.shape)
-        
-        color_image = np.asanyarray(color.get_data())
-        print("color_image shape:", color_image.shape)
-
-        cv2.imshow('RealSense_color', color_image)
-        cv2.imshow('RealSense_depth', depth_image)
-        cv2.waitKey(1)
-
-        # uncomment the following lines to save images in npy format
-        # save images in npy format
-        # depth_file = depth_file_name + str(i) + ".npy"
-        # color_file = color_file_name + str(i) + ".npy"
-        # print("saving frame set ", i, depth_file, color_file)
-        
-        # np.save(os.path.join(depth_directory, depth_file), depth_image)
-        # np.save(os.path.join(color_directory, color_file), color_image)
-        
-        # next frameset
-        
-        break
-        i = i +1
-except Exception as e:
-    print(e)
-    pass
-cv2.destroyAllWindows()
-######################## End of first part - capture images from live device #######################################
-
-
-
 ######################## Start of second part - align depth to color in software device #############################
 # align depth to color with the above precaptured images in software device
 
@@ -141,23 +50,15 @@ depth_sensor: rs.software_sensor = sdev.add_sensor("Depth")
 # depth instrincis
 depth_intrinsics = rs.intrinsics()
 
-# depth_intrinsics.width  = camera_depth_intrinsics.width
-# depth_intrinsics.height = camera_depth_intrinsics.height
 depth_intrinsics.width  = 1280
 depth_intrinsics.height = 720
 
-# depth_intrinsics.ppx = camera_depth_intrinsics.ppx
-# depth_intrinsics.ppy = camera_depth_intrinsics.ppy
 depth_intrinsics.ppx = 637.4591674804688
 depth_intrinsics.ppy = 361.9825439453125
 
-# depth_intrinsics.fx = camera_depth_intrinsics.fx
-# depth_intrinsics.fy = camera_depth_intrinsics.fy
 depth_intrinsics.fx = 637.8672485351562
 depth_intrinsics.fy = 637.8672485351562
 
-# depth_intrinsics.coeffs = camera_depth_intrinsics.coeffs       ## [0.0, 0.0, 0.0, 0.0, 0.0]
-# depth_intrinsics.model = camera_depth_intrinsics.model         ## rs.pyrealsense2.distortion.brown_conrady
 depth_intrinsics.coeffs = [0.0, 0.0, 0.0, 0.0, 0.0]      ## [0.0, 0.0, 0.0, 0.0, 0.0]
 depth_intrinsics.model = rs.pyrealsense2.distortion.brown_conrady     ## rs.pyrealsense2.distortion.brown_conrady
 
@@ -180,17 +81,21 @@ color_sensor: rs.software_sensor = sdev.add_sensor("Color")
 
 # color intrinsic:
 color_intrinsics = rs.intrinsics()
-color_intrinsics.width = camera_color_intrinsics.width
-color_intrinsics.height = camera_color_intrinsics.height
 
-color_intrinsics.ppx = camera_color_intrinsics.ppx
-color_intrinsics.ppy = camera_color_intrinsics.ppy
+color_intrinsics.width = 640
+color_intrinsics.height = 480
 
-color_intrinsics.fx = camera_color_intrinsics.fx
-color_intrinsics.fy = camera_color_intrinsics.fy
+color_intrinsics.ppx = 327.5497131347656
+color_intrinsics.ppy =  238.23207092285156
 
-color_intrinsics.coeffs = camera_color_intrinsics.coeffs
-color_intrinsics.model = camera_color_intrinsics.model
+color_intrinsics.fx = 616.52001953125
+color_intrinsics.fy = 615.0965576171875
+
+color_intrinsics.coeffs = [0.0, 0.0, 0.0, 0.0, 0.0]      ## [0.0, 0.0, 0.0, 0.0, 0.0]
+color_intrinsics.model = rs.pyrealsense2.distortion.brown_conrady     ## rs.pyrealsense2.distortion.brown_conrady
+
+print("color_intrinsics.coeffs:", color_intrinsics.coeffs)
+print("color_intrinsics.model:", color_intrinsics.model)
 
 color_stream = rs.video_stream()
 color_stream.type = rs.stream.color
@@ -207,8 +112,10 @@ color_profile = color_sensor.add_video_stream(color_stream)
 
 # depth to color extrinsics
 depth_to_color_extrinsics = rs.extrinsics()
-depth_to_color_extrinsics.rotation = camera_depth_to_color_extrinsics.rotation
-depth_to_color_extrinsics.translation = camera_depth_to_color_extrinsics.translation
+depth_to_color_extrinsics.rotation = [0.999919056892395, 0.012150709517300129, -0.0037808690685778856,
+                                       -0.012139241211116314, 0.9999216794967651, 0.003041553311049938,
+                                         0.0038175301160663366, -0.0029954100027680397, 0.9999881982803345]
+depth_to_color_extrinsics.translation = [0.015014111064374447, 0.0002514976658858359, 0.00042542649316601455]
 depth_profile.register_extrinsics_to(depth_profile, depth_to_color_extrinsics)
 
 # start software sensors
