@@ -14,108 +14,73 @@ class ImageListener:
         self.sub = rospy.Subscriber(depth_image_topic, msg_Image, self.imageDepthCallback)
         self.sub_info = rospy.Subscriber(depth_info_topic, CameraInfo, self.imageDepthInfoCallback)
         self.pub = rospy.Publisher("/projected_depth_on_DVS", msg_Image, queue_size=10)
-        confidence_topic = depth_image_topic.replace('depth', 'confidence')
-        self.sub_conf = rospy.Subscriber(confidence_topic, msg_Image, self.confidenceCallback)
-        self.intrinsics = None
-        self.pix = None
-        self.pix_grade = None
+        self.depth_intrinsic = None
         self.depth2DVS = tf_matrix_depth_2_dvs
-        self.DVS_K = dvs_intrinsic_matrix
-        self.projected_depth_on_DVS = 127*np.ones((260, 346), dtype=np.uint16)
-        self.dvs_pix_offset_height = -65 
-        self.dvs_pix_offset_width = 0
+        # self.DVS_K = dvs_intrinsic_matrix
+        self.projected_depth_on_DVS = np.zeros((260, 346), dtype=np.uint16)
+        # create intrinsic object for DVS camera
+        self.DVS_intrinsics = rs2.intrinsics()
+        self.DVS_intrinsics.width = 346
+        self.DVS_intrinsics.height = 260
+        self.DVS_intrinsics.ppx = dvs_intrinsic_matrix[0, 2]
+        self.DVS_intrinsics.ppy = dvs_intrinsic_matrix[1, 2]
+        self.DVS_intrinsics.fx = dvs_intrinsic_matrix[0, 0]
+        self.DVS_intrinsics.fy = dvs_intrinsic_matrix[1, 1]
+        self.DVS_intrinsics.coeffs = [0.0, 0.0, 0.0, 0.0, 0.0]      ## [0.0, 0.0, 0.0, 0.0, 0.0]
+        self.DVS_intrinsics.model = rs2.pyrealsense2.distortion.brown_conrady 
+
+        # create extrinsic object for DVS camera
+        self.depth2DVS_extrinsics = rs2.extrinsics()
+        self.depth2DVS_extrinsics.rotation = tf_matrix_depth_2_dvs[:3, :3].reshape(9).tolist()
+        self.depth2DVS_extrinsics.translation = tf_matrix_depth_2_dvs[:3, 3].T.tolist()
 
     def imageDepthCallback(self, data):
         try:
             cnt = 0
-            cv_image = self.bridge.imgmsg_to_cv2(data, data.encoding)
-            for y in range(cv_image.shape[1]):
-                for x in range(cv_image.shape[0]):                    
-                    pix = (y, x)
-                    self.pix = pix
-                    
-                    line = '\rDepth at pixel(%3d, %3d): %7.1f(mm).' % (pix[0], pix[1], cv_image[pix[1], pix[0]])
-
-                    if self.intrinsics:
-                        depth = cv_image[pix[1], pix[0]]
-                        result = rs2.rs2_deproject_pixel_to_point(self.intrinsics, [pix[0], pix[1]], depth)
-                        if result[2] > 0:
-                            line += '  Depth Camaera Coordinate: %8.2f %8.2f %8.2f.\n' % (result[0], result[1], result[2])
-                            # convert depth camera coordinate to DVS camera coordinate
-                            result = np.dot(self.depth2DVS, np.array([result[0], result[1], result[2], 1]))[:3]
-                            line += 5*'\t'+'  DVS Camera Coordinate: %8.2f %8.2f %8.2f.\n' % (result[0], result[1], result[2])
-                             # convert DVS camera coordinate to pixel coordinate
-                            result = np.dot(self.DVS_K, result)
-                            Z = result[2]
-                            result = result / Z
-                            # offset values 
-                            result[0] = result[0] 
-                            result[1] = result[1] + self.dvs_pix_offset_height
-
-                            print("result: ", result)
-                            if result[0] >= 0 and result[0] < 346 and result[1] >= 0 and result[1] < 260:
-                                #make the pixel coordinate to be integer
-                                DVS_pix = np.round(np.array([result[1], result[0]])).astype(int) # 2x1 vector
-                                line += 5*'\t'+'  DVS Pixel Coordinate: %8.2f %8.2f with depth value %8.2f.\n ' % (DVS_pix[0], DVS_pix[1],Z)
-                                self.projected_depth_on_DVS[int(result[1]), int(result[0])] = Z
-                                cnt += 1
-                                print("iteration no: ", cnt)
-                            #time.sleep(0.1)
-                    if (not self.pix_grade is None):
-                        line += ' Grade: %2d' % self.pix_grade
-                    line += '\r'
-                    sys.stdout.write(line)
-                    sys.stdout.flush()
+            cv_depth__image = self.bridge.imgmsg_to_cv2(data, data.encoding)
+            self.projected_depth_on_DVS = project_from_depth_to_dvs(cv_depth__image, self.depth_intrinsic, self.depth2DVS_extrinsics, self.DVS_intrinsics)
             self.pub.publish(self.bridge.cv2_to_imgmsg(self.projected_depth_on_DVS, encoding=data.encoding))
-            # cv2.imshow("Projected Depth on DVS", self.projected_depth_on_DVS)
-            # cv2.imshow("Depth Image", cv_image)
-            # cv2.waitKey(0)
-            # cv2.destroyAllWindows()
-
+    
         except CvBridgeError as e:
             print(e)
             return
         except ValueError as e:
             return
 
-    def confidenceCallback(self, data):
-        try:
-            cv_image = self.bridge.imgmsg_to_cv2(data, data.encoding)
-            grades = np.bitwise_and(cv_image >> 4, 0x0f)
-            if (self.pix):
-                self.pix_grade = grades[self.pix[1], self.pix[0]]
-        except CvBridgeError as e:
-            print(e)
-            return
-
-
-
     def imageDepthInfoCallback(self, cameraInfo):
         try:
-            if self.intrinsics:
+            if self.depth_intrinsic:
                 return
-            self.intrinsics = rs2.intrinsics()
-            self.intrinsics.width = cameraInfo.width
-            self.intrinsics.height = cameraInfo.height
-            self.intrinsics.ppx = cameraInfo.K[2]
-            self.intrinsics.ppy = cameraInfo.K[5]
-            self.intrinsics.fx = cameraInfo.K[0]
-            self.intrinsics.fy = cameraInfo.K[4]
+            self.depth_intrinsic = rs2.intrinsics()
+            self.depth_intrinsic.width = cameraInfo.width
+            self.depth_intrinsic.height = cameraInfo.height
+            self.depth_intrinsic.ppx = cameraInfo.K[2]
+            self.depth_intrinsic.ppy = cameraInfo.K[5]
+            self.depth_intrinsic.fx = cameraInfo.K[0]
+            self.depth_intrinsic.fy = cameraInfo.K[4]
             if cameraInfo.distortion_model == 'plumb_bob':
-                self.intrinsics.model = rs2.distortion.brown_conrady
+                self.depth_intrinsic.model = rs2.distortion.brown_conrady
             elif cameraInfo.distortion_model == 'equidistant':
-                self.intrinsics.model = rs2.distortion.kannala_brandt4
-            self.intrinsics.coeffs = [i for i in cameraInfo.D]
+                self.depth_intrinsic.model = rs2.distortion.kannala_brandt4
+            self.depth_intrinsic.coeffs = [i for i in cameraInfo.D]
         except CvBridgeError as e:
             print(e)
             return
 
-def W2pix(W, K):
-        Z = W[2]
-        W = W / Z
-        pixel = np.dot(K, W)
-        pixel = np.round(np.array([pixel[1], pixel[0]])).astype(int) # 2x1 vector
-        return pixel
+def project_from_depth_to_dvs(depth_image, depth_intrinsic, depth_2_dvs, dvs_intrinsic):
+    projected_image_on_dvs = np.zeros((dvs_intrinsic.height, dvs_intrinsic.width), dtype=np.uint16)
+    for x in range(depth_image.shape[1]):
+        for y in range(depth_image.shape[0]):
+            Z_depth = depth_image[y, x]
+            if Z_depth > 0 and Z_depth< 3000: # 10 meters limit for projection
+                W_depth = rs2.rs2_deproject_pixel_to_point(depth_intrinsic, [x, y], Z_depth)
+                W_dvs = rs2.rs2_transform_point_to_point(depth_2_dvs, W_depth)
+                dvs_pixel = rs2.rs2_project_point_to_pixel(dvs_intrinsic, W_dvs)
+                print("dvs_pixel: ", dvs_pixel)
+                if dvs_pixel[0] >= 0 and dvs_pixel[0] < dvs_intrinsic.width and dvs_pixel[1] >= 0 and dvs_pixel[1] < dvs_intrinsic.height:
+                    print("dvs_pixel_integer: ", int(dvs_pixel[1]), int(dvs_pixel[0]))
+                    projected_image_on_dvs[int(dvs_pixel[1]), int(dvs_pixel[0])] = Z_depth
+    return projected_image_on_dvs
 
 def inverse_transform_matrix(transform_matrix):
     transform_matrix_rot = transform_matrix[:3, :3]
