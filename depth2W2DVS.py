@@ -12,6 +12,7 @@ class ImageListener:
     def __init__(self, depth_image_topic, depth_info_topic, dvs_intrinsic_matrix, tf_matrix_depth_2_dvs):
         self.bridge = CvBridge()
         self.sub = rospy.Subscriber(depth_image_topic, msg_Image, self.imageDepthCallback)
+        # self.sub = rospy.Subscriber("/dvs/image_raw", msg_Image, self.imageColorCallback) # subscribe to DVS image
         self.sub_info = rospy.Subscriber(depth_info_topic, CameraInfo, self.imageDepthInfoCallback)
         self.pub = rospy.Publisher("/projected_depth_on_DVS", msg_Image, queue_size=10)
         self.projected_depth_on_DVS = np.zeros((260, 346), dtype=np.uint16)
@@ -54,16 +55,22 @@ class ImageListener:
     def imageDepthCallback(self, data):
         try:
             cv_depth_image = self.bridge.imgmsg_to_cv2(data, data.encoding)
-            print("depth image size",cv_depth_image.shape)
-            self.projected_depth_on_DVS = project_from_depth_to_dvs(cv_depth_image, self.depth_intrinsic,
-                                                                     self.depth2DVS_extrinsics,self.DVS_intrinsics, self.ROI)
+            self.projected_depth_on_DVS = project_from_depth_to_dvs(cv_depth_image, self.depth_intrinsic,self.depth2DVS_extrinsics,self.DVS_intrinsics, self.ROI)
             self.pub.publish(self.bridge.cv2_to_imgmsg(self.projected_depth_on_DVS, encoding=data.encoding))
-    
         except CvBridgeError as e:
             print(e)
             return
         except ValueError as e:
             return
+        else:
+            colorized_depth = cv2.applyColorMap(cv2.convertScaleAbs(cv_depth_image, alpha=0.03), cv2.COLORMAP_JET)
+            #draw the ROI on the colorized depth image
+            cv2.rectangle(colorized_depth, (self.ROI[0], self.ROI[2]), (self.ROI[1], self.ROI[3]), (255, 255, 255), 2)
+            cv2.imshow("Projected Depth on DVS", colorized_depth)
+            cv2.waitKey(1)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                cv2.destroyAllWindows()
+                rospy.signal_shutdown("User hit q key to quit")
 
     def imageDepthInfoCallback(self, cameraInfo):
         try:
@@ -84,12 +91,21 @@ class ImageListener:
         except CvBridgeError as e:
             print(e)
             return
+    
+    def imageColorCallback(self, data):
+        try:
+            cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8") #(260, 346, 3) image from DVS
+        except CvBridgeError as e:
+            print(e)
+        else:
+            cv2.imshow("Camera Image", cv_image)
+            cv2.waitKey(1)
 
 def project_from_depth_to_dvs(depth_image, depth_intrinsic, depth_2_dvs, dvs_intrinsic, ROI):
-    projected_image_on_dvs = 250*np.ones((dvs_intrinsic.height, dvs_intrinsic.width), dtype=np.uint16)
+    projected_image_on_dvs = np.zeros((dvs_intrinsic.height, dvs_intrinsic.width), dtype=np.uint16)
     for x in range(depth_image.shape[1]):
         for y in range(depth_image.shape[0]):
-            if x < ROI[0] or x > ROI[1] or y < ROI[2]-100 or y > ROI[3]:
+            if x < ROI[0] or x > ROI[1] or y < ROI[2] or y > ROI[3]:
                 continue
             Z_depth = depth_image[y, x]
             if Z_depth > 0 and Z_depth< 3000: # 3 meters limit for projection
@@ -100,6 +116,7 @@ def project_from_depth_to_dvs(depth_image, depth_intrinsic, depth_2_dvs, dvs_int
                 if dvs_pixel[0] >= 0 and dvs_pixel[0] < dvs_intrinsic.width and dvs_pixel[1] >= 0 and dvs_pixel[1] < dvs_intrinsic.height:
                     # print("dvs_pixel_integer: ", int(dvs_pixel[1]), int(dvs_pixel[0]))
                     projected_image_on_dvs[int(dvs_pixel[1]), int(dvs_pixel[0])] = Z_depth
+    # print("Shape of projected_image_on_dvs: ", projected_image_on_dvs.shape)
     return projected_image_on_dvs
 
 def inverse_transform_matrix(transform_matrix):
@@ -129,20 +146,34 @@ def ROI_for_depth_from_DVS(depth_intrinsic, dvs_intrinsic, dvs_2_depth, limiting
     depth_pixel = rs2.rs2_project_point_to_pixel(depth_intrinsic, W_depth)
     # round down the pixel values
     dvs_left_upper_border = np.array([int(depth_pixel[0]), int(depth_pixel[0])])
-    print("dvs_left_upper_border: ", dvs_left_upper_border)
 
     # for bottom right corner
-    print("dvs_intrinsic.width-1, dvs_intrinsic.height-1: ", dvs_intrinsic.width-1, dvs_intrinsic.height-1)
     W_dvs = rs2.rs2_deproject_pixel_to_point(dvs_intrinsic, [dvs_intrinsic.width-1, dvs_intrinsic.height-1], limiting_distance)
     W_depth = rs2.rs2_transform_point_to_point(dvs_2_depth, W_dvs)
     depth_pixel = rs2.rs2_project_point_to_pixel(depth_intrinsic, W_depth)
     # round up the pixel values
     dvs_right_bottom_border = np.array([int(depth_pixel[0]+0.999999999), int(depth_pixel[0]+0.999999999)])
-    print("dvs_right_bottom_border: ", dvs_right_bottom_border)
-    ROI = [dvs_left_upper_border[0], dvs_right_bottom_border[1], dvs_left_upper_border[1], dvs_right_bottom_border[1]]
+
+    
+    # ROI = [dvs_left_upper_border[0], dvs_right_bottom_border[1], dvs_left_upper_border[1], dvs_right_bottom_border[1]]
+    # The math is need to be checked for the ROI, it seems correct for the x values but not for the y values, 
+    # by guessing, subtracted 260/2 = 130 from the y values
+    ROI = [dvs_left_upper_border[0], dvs_right_bottom_border[0], dvs_left_upper_border[1]-130, dvs_right_bottom_border[1]-130]
+    print("border shape on depth from ROI: ", ROI[1]-ROI[0], ROI[3]-ROI[2])
     print("ROI: ", ROI)
 
     return ROI
+
+def bilinear_interpolation(image):
+    """
+    Bilinear interpolation for the given image
+    
+    parameters:
+    image: input image for bilinear interpolation, in the form of pixel indexes and values
+    """
+    # TODO
+
+    pass
 
 def main():
     depth_image_topic = '/camera/depth/image_rect_raw'
