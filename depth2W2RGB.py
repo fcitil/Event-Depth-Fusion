@@ -9,7 +9,7 @@ import numpy as np
 import pyrealsense2 as rs2
 import cv2
 import math
-
+import time
 
 class Pixel_Matching:
     def __init__(
@@ -57,8 +57,11 @@ class Pixel_Matching:
         self.pub_ROI = rospy.Publisher("/ROI", msg_Image, queue_size=10)
 
         self.cnt = 0
+        self.total_processing_time = 0
+        self.frame_count = 0
 
     def imageDepthCallback(self, data):
+        start_time = time.time()
         try:
             if self.ROI is None:
                 self.ROI = ROI_for_depth_from_RGB(
@@ -102,6 +105,15 @@ class Pixel_Matching:
 
             self.cnt += 1
             print("cnt: ", self.cnt)
+
+            end_time = time.time()
+            processing_time = end_time - start_time
+            self.total_processing_time += processing_time
+            self.frame_count += 1
+
+            if self.frame_count % 50 == 0:  # Print average every 50 frames
+                average_processing_time = self.total_processing_time / self.frame_count
+                print(f"Average processing time per frame: {average_processing_time:.5f} seconds")
 
         except CvBridgeError as e:
             print(e)
